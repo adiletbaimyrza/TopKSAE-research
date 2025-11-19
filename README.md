@@ -1,3 +1,6 @@
+>Based on MIT licensed software from the ICML 2025 paper linked below
+
+
 <div align="center">
 <h1>Interpreting CLIP with Hierarchical Sparse Autoencoders</h1>
 
