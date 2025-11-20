@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-dm", "--dataset_second_modality", type=str, default=None,
                        help="Path to second modality dataset file (.npy)")
     parser.add_argument("-m", "--model", type=str, required=True, 
-                       choices=["ReLUSAE", "TopKSAE", "BatchTopKSAE", "MSAE_UW", "MSAE_RW"], 
+                       choices=["ReLUSAE", "TopKSAE", "TopKDcorSAE", "BatchTopKSAE", "MSAE_UW", "MSAE_RW"], 
                        help="Model architecture to train")
     parser.add_argument("-a", "--activation", type=str, required=True, 
                        help="Activation function (e.g., 'ReLU_003', 'TopKReLU_64')")
@@ -69,6 +69,7 @@ def eval(model, eval_loader, loss_fn, device, cfg):
     loss_all = 0.0
     recon_loss_all = 0.0
     sparse_loss_all = 0.0
+    independence_loss_all = 0.0
     cknna_score_sparse_sum = 0.0
     cknna_score_all_sum = 0.0
     fvu_score_all_sum = 0.0
@@ -89,7 +90,7 @@ def eval(model, eval_loader, loss_fn, device, cfg):
         # Forward pass without gradient computation
         with torch.no_grad():
             recons_sparse, repr_sparse, recons_all, repr_all = model(embeddings)
-            loss, recon_loss, sparse_loss = loss_fn(recons_all, embeddings, repr_all)
+            loss, recon_loss, sparse_loss, independence_loss = loss_fn(recons_all, embeddings, repr_all)
         
         if cfg.model.use_matryoshka:
             recons_sparse = recons_sparse[0]
@@ -99,6 +100,7 @@ def eval(model, eval_loader, loss_fn, device, cfg):
         loss_all += loss.item()
         recon_loss_all += recon_loss.item()
         sparse_loss_all += sparse_loss.item()
+        independence_loss_all += sparse_loss.item()
         
         # Accumulate CKNNA scores
         cknna_score_sparse_sum += cknna(recons_sparse, embeddings)
@@ -126,6 +128,7 @@ def eval(model, eval_loader, loss_fn, device, cfg):
     logger.info(f"  Loss: {loss_all / len(eval_loader):.6f}")
     logger.info(f"  Reconstruction Loss: {recon_loss_all / len(eval_loader):.6f}")
     logger.info(f"  Sparsity Loss: {sparse_loss_all / len(eval_loader):.6f}")
+    logger.info(f"  Independence Loss: {independence_loss_all / len(eval_loader):.6f}")
     logger.info(f"  FVU Sparse: {fvu_score_sparse_sum / len(eval_loader):.4f}")
     logger.info(f"  FVU All: {fvu_score_all_sum / len(eval_loader):.4f}")
     logger.info(f"  CKNNA Sparse: {cknna_score_sparse_sum / len(eval_loader):.4f}")
@@ -272,6 +275,8 @@ def main(args):
         reconstruction_loss=cfg.loss.reconstruction_loss,
         sparse_loss=cfg.loss.sparse_loss,
         sparse_weight=cfg.loss.sparse_weight,
+        independence_loss=cfg.loss.independence_loss,
+        independence_weight=cfg.loss.independence_weight,
         mean_input=mean_input,
     )
     
@@ -363,7 +368,7 @@ def main(args):
                 recons_sparse = recons_sparse[0]
             else:
                 # Standard SAE loss computation
-                loss, recon_loss, sparse_loss = loss_fn(recons_sparse, embeddings, repr_sparse)
+                loss, recon_loss, sparse_loss, independence_loss = loss_fn(recons_sparse, embeddings, repr_sparse)
             
             # Backpropagation
             loss.backward()
@@ -414,7 +419,7 @@ def main(args):
             
             # Log metrics periodically
             if global_step % cfg.training.print_freq == 0:
-                logger.info(f"Epoch: {epoch+1}, Step: {step}, Loss: {loss.item():.6f}, Recon Loss: {recon_loss.item():.6f}, Sparse Loss: {sparse_loss.item():.6f}")
+                logger.info(f"Epoch: {epoch+1}, Step: {step}, Loss: {loss.item():.6f}, Recon Loss: {recon_loss.item():.6f}, Sparse Loss: {sparse_loss.item():.6f} Independence Loss: {independence_loss.item():.6f}")
                 logger.info(f"FVU Sparse: {fvu_score_sparse:.4f}, FVU All: {fvu_score_all:.4f}")
                 logger.info(f"CKNNA Sparse: {cknna_score_sparse:.4f}, CKNNA All: {cknna_score_all:.4f}")
                 logger.info(f"Cosine Similarity Sparse: {diagonal_cs_sparse:.4f}, MAE Distance Sparse: {mae_distance_sparse:.4f}")
@@ -428,7 +433,7 @@ def main(args):
         
         # Log epoch summary
         lr_rate = scheduler.get_last_lr()[0] if scheduler else cfg.training.lr
-        logger.info(f"Epoch: {epoch+1}, Learning Rate: {lr_rate:.6f}, Loss: {loss.item():.6f}, Recon Loss: {recon_loss.item():.6f}, Sparse Loss: {sparse_loss.item():.6f}, Dead neurons: {numb_of_dead_neurons}")
+        logger.info(f"Epoch: {epoch+1}, Learning Rate: {lr_rate:.6f}, Loss: {loss.item():.6f}, Recon Loss: {recon_loss.item():.6f}, Sparse Loss: {sparse_loss.item():.6f}, Independence Loss: {independence_loss.item():.6f}, Dead neurons: {numb_of_dead_neurons}")
     
         # Evaluate the model on the validation set
         eval(model, eval_loader, loss_fn, device, cfg)
