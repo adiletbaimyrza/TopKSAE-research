@@ -100,7 +100,7 @@ def eval(model, eval_loader, loss_fn, device, cfg):
         loss_all += loss.item()
         recon_loss_all += recon_loss.item()
         sparse_loss_all += sparse_loss.item()
-        independence_loss_all += sparse_loss.item()
+        independence_loss_all += independence_loss.item()
         
         # Accumulate CKNNA scores
         cknna_score_sparse_sum += cknna(recons_sparse, embeddings)
