@@ -277,7 +277,7 @@ def train_linear_probe(model: torch.nn.Module, dataset: torch.utils.data.Dataset
     # Define optimizer, scheduler and loss function
     optimizer = torch.optim.AdamW(linear_probe.parameters(), lr=1e-3)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=5, verbose=True
+        optimizer, mode='max', factor=0.5, patience=5
     )
     criterion = torch.nn.CrossEntropyLoss()
 

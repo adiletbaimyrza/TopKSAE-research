@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
                        help="Random seed for reproducibility")
     parser.add_argument("-w", "--num-workers", type=int, default=12, 
                        help="Number of worker processes for data loading")
+    parser.add_argument("-d", "--device", default=None)
     parser.add_argument("--patch-diff", default=True,
                        help="Remove zero sae activation reconstruction vector")
     parser.add_argument("--verbose", action='store_true', help="Print found matches")
@@ -132,7 +133,7 @@ def compute_similarities(
             # In the paper we used `input_processed, _ = model.model.preprocess(batch_data.to(device))`
             # However due to not perfect reconstruction of the model, we simply use the CLIP text 
             # Compute similarity
-            std_sim = cosine_similarity_matrix(batch_data, decoded_search_space)
+            std_sim = cosine_similarity_matrix(batch_data.to(decoded_search_space.device), decoded_search_space)
             standard_similarities.append(std_sim.cpu().numpy())
             
     # Convert lists of batch results to complete matrices
@@ -157,9 +158,11 @@ def main(args):
     """
     # Set random seed for reproducibility
     set_seed(args.seed)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if args.device is None  else torch.device(args.device)
     
     # Load the trained SAE model
-    model = SAE(args.model)
+    model = SAE(args.model).to(device)
     logger.info("Model loaded")
     
     # Load the vocabulary dataset

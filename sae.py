@@ -818,7 +818,7 @@ def load_model(path):
     
     # Create and load the model
     model = Autoencoder(n_latents, n_inputs, activation, tied=tied, normalize=normalize, latent_soft_cap=latent_soft_cap)
-    model_state_dict = torch.load(path, map_location='cuda' if torch.cuda.is_available() else 'cpu')
+    model_state_dict = torch.load(path, map_location='cuda' if torch.cuda.is_available() else 'cpu', weights_only=False)
     model.load_state_dict(model_state_dict['model'])
     mean_center = model_state_dict['mean_center']
     scaling_factor = model_state_dict['scaling_factor']
