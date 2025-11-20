@@ -154,8 +154,7 @@ class HFDataset(Dataset):
     """
     def __init__(self, dataset, preprocess, split, download_full=False, **kwargs):
         stream = not download_full
-        self.dataset = load_dataset(dataset, split=split, streaming=stream, 
-                                    trust_remote_code=True, **kwargs)
+        self.dataset = load_dataset(dataset, split=split, streaming=stream, **kwargs)
         self.preprocess = preprocess
         self.len: int = 0  # Will be set by child classes
     

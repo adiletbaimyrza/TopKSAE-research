@@ -1,10 +1,10 @@
 #!/bin/bash -l
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=4
+#SBATCH --time=5:00:00
+#SBATCH --mem=128G
 #SBATCH --gres=gpu:1
-#SBATCH --mem=48G
-#SBATCH --time=00:30:00
 #SBATCH --account=plgbcfg-gpu-gh200
 #SBATCH --partition=plgrid-gpu-gh200
 #SBATCH --output=act-out-%j.log
@@ -20,4 +20,4 @@ export HF_HOME=$SCRATCH/hf_home
 
 source env/bin/activate
 
-python precompute_activations.py -d cc3m -m ViT-B~16 -s
+python precompute_activations.py -d cc3m -m ViT-B~16 -s -w 1
