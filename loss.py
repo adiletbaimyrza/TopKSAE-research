@@ -76,7 +76,7 @@ class SAELoss(torch.nn.Module):
         independence_loss = (
             self.independence_loss_fn(latent_activations)
             if self.independence_loss_fn is not None
-            else torch.tensor([0])
+            else torch.tensor([0]).to(latent_activations.device)
         )
 
         return (
