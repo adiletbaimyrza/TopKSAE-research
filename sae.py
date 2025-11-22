@@ -241,6 +241,112 @@ class JumpReLU(nn.Module):
         return StepFunction.apply(x, self.log_threshold, self.bandwidth)
 
 
+
+class SoftTopK(torch.autograd.Function):
+    @staticmethod
+    def _solve(s, t, a, b, e):
+        z = torch.abs(e) + torch.sqrt(e**2 + a * b * torch.exp(s - t))
+        ab = torch.where(e > 0, a, b)
+        return torch.where(
+            e > 0, t + torch.log(z) - torch.log(ab), s - torch.log(z) + torch.log(ab)
+        )
+
+    @staticmethod
+    def forward(ctx, r, k, alpha, descending=False):
+        assert r.shape[0] == k.shape[0], "k must have same batch size as r"
+        
+        batch_size, num_dim = r.shape
+        x = torch.empty_like(r, requires_grad=False)
+
+        def finding_b():
+            scaled = torch.sort(r, dim=1)[0]
+            scaled.div_(alpha)
+            
+            eB = torch.logcumsumexp(scaled, dim=1)
+            eB.sub_(scaled).exp_()
+            
+            torch.neg(scaled, out=x)
+            eA = torch.flip(x, dims=(1,))
+            torch.logcumsumexp(eA, dim=1, out=x)
+            idx = torch.arange(start=num_dim - 1, end=-1, step=-1, device=x.device)
+            torch.index_select(x, 1, idx, out=eA)
+            eA.add_(scaled).exp_()
+            
+            row = torch.arange(1, 2 * num_dim + 1, 2, device=r.device)
+            torch.add(torch.add(eA, eB, alpha=-1, out=x), row.view(1, -1), out=x)
+            
+            w = (k if descending else num_dim - k).unsqueeze(1)
+            i = torch.searchsorted(x, 2 * w)
+            m = torch.clamp(i - 1, 0, num_dim - 1)
+            n = torch.clamp(i, 0, num_dim - 1)
+            
+            b = SoftTopK._solve(
+                scaled.gather(1, m),
+                scaled.gather(1, n),
+                torch.where(i < num_dim, eA.gather(1, n), 0),
+                torch.where(i > 0, eB.gather(1, m), 0),
+                w - i,
+            )
+            return b
+
+        b = finding_b()
+        
+        sign = -1 if descending else 1
+        torch.div(r, alpha * sign, out=x)
+        x.sub_(sign * b)
+        
+        sign_x = x > 0
+        p = torch.abs(x)
+        p.neg_().exp_().mul_(0.5)
+        
+        inv_alpha = -sign / alpha
+        S = torch.sum(p, dim=1, keepdim=True).mul_(inv_alpha)
+        
+        torch.where(sign_x, 1 - p, p, out=p)
+        
+        ctx.save_for_backward(r, x, S)
+        ctx.alpha = alpha
+        return p
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        r, x, S = ctx.saved_tensors
+        alpha = ctx.alpha
+        
+        # Clone tensors to avoid in-place modifications on saved tensors
+        x = x.clone()
+        r = r.clone()
+        
+        q_temp = torch.softmax(-torch.abs(x), dim=1)
+        qgrad = q_temp * grad_output
+        grad_k = qgrad.sum(dim=1)
+        grad_r = S * q_temp * (grad_k.unsqueeze(1) - grad_output)
+        
+        return grad_r, None, None, None
+
+
+class AdaptiveSoftTopK(nn.Module):
+    def __init__(self, k, target_alpha=0.05, initial_alpha=1, descending = False, epochs=30):
+        super().__init__()
+        self.k = k
+        self.initial_alpha = initial_alpha
+        self.target_alpha = target_alpha
+        self.alpha = initial_alpha
+        self.descending = descending
+        self.epochs = epochs
+        self.step = (target_alpha - initial_alpha) / self.epochs
+
+    def step_alpha(self):
+        self.alpha += self.step
+
+    def forward(self, x: torch.Tensor):
+        k = torch.full((x.shape[0],), self.k, dtype=torch.long, device=x.device)
+
+        if not self.training:
+            return SoftTopK.apply(x, k, self.target_alpha, self.descending)
+
+        return SoftTopK.apply(x, k, self.alpha, self.descending)
+
 # Mapping of activation function names to their corresponding classes
 ACTIVATIONS_CLASSES = {
     "ReLU": nn.ReLU,
@@ -254,6 +360,7 @@ ACTIVATIONS_CLASSES = {
     "BatchTopKReLU": partial(BatchTopK, act_fn=nn.ReLU()),
     "BatchTopKabs": partial(BatchTopK, use_abs=True, act_fn=nn.Identity()),
     "BatchTopKabsReLU": partial(BatchTopK, use_abs=True, act_fn=nn.ReLU()),
+    "AdaptiveSoftTopK": AdaptiveSoftTopK
 }
 
 
