@@ -550,8 +550,8 @@ def main(args):
 
         alpha_log = ""
         if isinstance(model.activation, AdaptiveSoftTopK):
-            model.activation.step_alpha()
             alpha_log = f"SoftTopK alpha: {model.activation.alpha:.4f}"
+            model.activation.step_alpha()
 
         # Log epoch summary
         lr_rate = scheduler.get_last_lr()[0] if scheduler else cfg.training.lr
