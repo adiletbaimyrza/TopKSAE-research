@@ -2,13 +2,12 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=4
-#SBATCH --time=00:15:00
-#SBATCH --mem=32G
+#SBATCH --time=05:00:00
 #SBATCH --gres=gpu:1
 #SBATCH --account=plgbcfg-gpu-gh200
 #SBATCH --partition=plgrid-gpu-gh200
-#SBATCH --output=act-out-%j.log
-#SBATCH --error=act-err-%j.log
+#SBATCH --output=train-out-%j.log
+#SBATCH --error=train-err-%j.log
 
 # IMPORTANT: load the modules for machine learning tasks and libraries
 ml ML-bundle/25.10
@@ -20,4 +19,7 @@ export HF_HOME=$SCRATCH/hf_home
 
 source env/bin/activate
 
-python precompute_activations.py -d imagenet -m ViT-B~16 -w 1
+python train.py -dt data/cc3m_ViT-B~16_train_image_2905954_512.npy \
+       -ds data/imagenet_ViT-B~16_train_image_1281167_512.npy \
+       -dm data/cc3m_ViT-B~16_validation_text_13443_512.npy \
+       --expansion_factor 8 --epochs 30 -m TopKSAE -a TopKReLU_64

@@ -460,7 +460,7 @@ def main(args):
     # Construct filename with key hyperparameters
     model_params = f"{cfg.model.n_latents}_{cfg.model.n_inputs}_{activation}{model_appendix}_{cfg.model.tied}_{cfg.model.normalize}_{cfg.model.latent_soft_cap}"
     dataset_name = args.dataset_train.split("/")[-1].split(".")[0]
-    save_path = f"{model_params}_{dataset_name}.pth"
+    save_path = f"{model_params}_{dataset_name}_{cfg.loss.independence_loss}_{cfg.training.seed}.pth"
     
     # Save model state and preprocessing parameters
     torch.save({
