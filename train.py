@@ -88,7 +88,8 @@ def parse_args() -> argparse.Namespace:
         choices=[
             "ReLUSAE",
             "TopKSAE",
-            "TopKDcorSAE",
+            "TopKDcorLatentSAE",
+            "TopKDcorReconSAE",
             "BatchTopKSAE",
             "MSAE_UW",
             "MSAE_RW",
@@ -143,7 +144,7 @@ def eval(model, eval_loader, loss_fn, device, cfg):
         with torch.no_grad():
             recons_sparse, repr_sparse, recons_all, repr_all = model(embeddings)
             loss, recon_loss, sparse_loss, independence_loss = loss_fn(
-                recons_all, embeddings, repr_all
+                recons_all, embeddings, repr_all, model.decode
             )
 
         if cfg.model.use_matryoshka:
@@ -440,14 +441,14 @@ def main(args):
             # Compute loss based on model type
             if cfg.model.use_matryoshka:
                 # For Matryoshka models, compute weighted loss across all nesting levels
-                sparse_loss = loss_fn(recons_all, embeddings, repr_all)[-1]
-                recon_loss = loss_fn(recons_sparse[0], embeddings, repr_all)[1]
+                sparse_loss = loss_fn(recons_all, embeddings, repr_all, model.decode)[-1]
+                recon_loss = loss_fn(recons_sparse[0], embeddings, repr_all, model.decode)[1]
 
                 # Weight reconstruction losses by relative importance
                 loss_recon_all = torch.tensor(0.0, requires_grad=True, device=device)
                 for i in range(len(recons_sparse)):
                     current_loss = loss_fn(
-                        recons_sparse[i], embeddings, repr_sparse[i]
+                        recons_sparse[i], embeddings, repr_sparse[i], model.decode
                     )[1]
                     loss_recon_all = (
                         loss_recon_all + current_loss * model.relative_importance[i]
@@ -462,11 +463,15 @@ def main(args):
             else:
                 # Standard SAE loss computation
                 loss, recon_loss, sparse_loss, independence_loss = loss_fn(
-                    recons_sparse, embeddings, repr_sparse
+                    recons_sparse, embeddings, repr_sparse, model.decode
                 )
 
             # Backpropagation
             loss.backward()
+
+            for n,p in model.named_parameters():
+                if p.grad is not None and torch.isnan(p.grad).any():
+                    print("NaN in grad:", n)
 
             # Weight normalization and gradient projection
             model.scale_to_unit_norm()
@@ -475,6 +480,7 @@ def main(args):
             # Gradient clipping for stability
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.training.clip_grad)
 
+            
             # Update model parameters
             optimizer.step()
 

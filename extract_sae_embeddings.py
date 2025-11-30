@@ -13,6 +13,7 @@ from metrics import (
     l0_messure,
     cknna
 )
+from loss import dcor_latent_loss
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,6 +102,8 @@ def get_representation(model, dataset, repr_file_name, batch_size):
         sparse_cs = []
         sparse_cknnas = []
         dead_neurons_count = None
+
+        dcor_latent = []
         
         # Process data in batches
         for idx, batch in enumerate(tqdm(dataloader, desc="Extracting representations")):
@@ -132,6 +135,7 @@ def get_representation(model, dataset, repr_file_name, batch_size):
             mae.append(normalized_mean_absolute_error(batch, outputs))
             cs.append(torch.nn.functional.cosine_similarity(batch, outputs))
             l0.append(l0_messure(representations))
+            dcor_latent.append(dcor_latent_loss(outputs, k=64).item())
             # Only calculate the cknna if it even to the number of the batch
             if batch.shape[0] == batch_size:
                 cknnas.append(cknna(batch, representations, topk=10))
@@ -177,6 +181,7 @@ def get_representation(model, dataset, repr_file_name, batch_size):
         logger.info(f"Sparse Cosine similarity: {np.mean(sparse_cs)} +/- {np.std(sparse_cs)}")
         logger.info(f"Sparse L0 messure: {np.mean(sparse_l0)} +/- {np.std(sparse_l0)}")
         logger.info(f"Sparse CKNNA: {np.mean(sparse_cknnas)} +/- {np.std(sparse_cknnas)}")
+        logger.info(f"DCor latent: {np.mean(dcor_latent)} +/- {np.std(dcor_latent)}")
 
 
 def main(args):

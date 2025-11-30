@@ -54,6 +54,7 @@ class SAELoss(torch.nn.Module):
         reconstruction: torch.Tensor,
         original_input: torch.Tensor,
         latent_activations: torch.Tensor,
+        decoder = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Compute the combined loss for the sparse autoencoder.
@@ -73,8 +74,9 @@ class SAELoss(torch.nn.Module):
             reconstruction, original_input, self.mean_input
         )
         sparse_loss = self.sparse_loss_fn(latent_activations, original_input)
+
         independence_loss = (
-            self.independence_loss_fn(latent_activations)
+            self.independence_loss_fn(latent_activations, decoder)
             if self.independence_loss_fn is not None
             else torch.tensor([0]).to(latent_activations.device)
         )
@@ -217,7 +219,7 @@ def normalized_L1_loss(
     return (latent_activations.abs().sum(dim=-1) / original_input.norm(dim=-1)).mean()
 
 
-def dcor_latent_loss(latent_activations: torch.Tensor, k=16):
+def dcor_latent_loss(latent_activations: torch.Tensor, decoder=None, k=16):
     """
     Compute distance correlation between latent dimmensions and average them
 
@@ -270,6 +272,72 @@ def dcor_latent_loss(latent_activations: torch.Tensor, k=16):
     return dCor.mean()
 
 
+def pdist(x, eps=1e-8):
+    """
+    Pairwise Euclidean distances for a matrix of shape (n, d).
+    Fully differentiable.
+    """
+    x_norm = (x**2).sum(dim=1).unsqueeze(1)
+    dist = torch.sqrt(torch.clamp(x_norm + x_norm.t() - 2 * x @ x.t(), min=eps))
+    return dist
+
+
+def double_center(distance_matrix):
+    """
+    Double-centers a distance matrix A into:
+      A_ij - row_mean_i - col_mean_j + grand_mean
+    """
+    row_mean = distance_matrix.mean(dim=1, keepdim=True)
+    col_mean = distance_matrix.mean(dim=0, keepdim=True)
+    grand_mean = distance_matrix.mean()
+    return distance_matrix - row_mean - col_mean + grand_mean
+
+
+def distance_correlation(x, y, eps=1e-8):
+    """
+    Computes the differentiable distance correlation between
+    two tensors x and y of shape (n, d_x) and (n, d_y).
+    """
+    # Pairwise distances
+    a = pdist(x)
+    b = pdist(y)
+
+    # Double-centering
+    A = double_center(a)
+    B = double_center(b)
+
+    # Distance covariance
+    dcov_xy = (A * B).mean()
+    dcov_xx = (A * A).mean()
+    dcov_yy = (B * B).mean()
+
+    # Distance correlation
+    dcor = dcov_xy / torch.sqrt(torch.clamp(dcov_xx * dcov_yy, min=eps))
+    print(dcor)
+    return dcor
+
+
+def dcor_reconstruction(
+    latent_activations: torch.Tensor, decoder, k=None
+):
+    nonzero_cols = (latent_activations != 0).any(dim=0).nonzero(as_tuple=True)[0]
+    d = len(nonzero_cols)
+    i, j = nonzero_cols[torch.randperm(d)[:2]]
+
+    concept1 = torch.zeros_like(latent_activations)
+    concept1[:, i] = latent_activations[:, i]
+
+    concept2 = torch.zeros_like(latent_activations)
+    concept2[:, j] = latent_activations[:, j]
+
+    dec1 = decoder(concept1)
+    dec2 = decoder(concept2)
+
+
+    dcor =  distance_correlation(dec1 / dec1.norm(), dec2 / dec2.norm())
+    return dcor
+
+
 # Mapping of reconstruction loss function names to their implementations
 RECON_LOSSES_MAP = {
     "mse": mean_squared_error,
@@ -284,7 +352,10 @@ SPARSITY_LOSSES_MAP = {
     "l0": L0_loss,
 }
 
-INDEPENDENCE_LOSSES_MAP = {"DcorLatent": dcor_latent_loss}
+INDEPENDENCE_LOSSES_MAP = {
+    "DcorLatent": dcor_latent_loss,
+    "DcorRecon": dcor_reconstruction,
+}
 
 
 def get_recon_loss_fn(recon_loss: str) -> callable:
