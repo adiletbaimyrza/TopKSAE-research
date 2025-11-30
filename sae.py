@@ -325,25 +325,41 @@ class SoftTopK(torch.autograd.Function):
         return grad_r, None, None, None
 
 
-class AdaptiveSoftTopK(nn.Module):
-    def __init__(self, k, target_alpha=0.05, initial_alpha=1, descending = False, epochs=30):
+class AdaptiveSoftTopK():
+    # to simulate linear decay, set decay_rate to a value close to 0 (e.g. 0.01)
+    # decay_rate -> 1 steeper curve, decay_rate -> 0 flatter curve, closer to linear decay
+    def __init__(self, k, target_alpha=0.01, initial_alpha=1, decay_rate=0.2, descending=False, epochs=30, hard_epochs=None):
         super().__init__()
+
+        assert(0 < decay_rate <= 1)
+        if hard_epochs is not None:
+            assert hard_epochs > 0
+            assert hard_epochs < epochs
+        
         self.k = k
         self.initial_alpha = initial_alpha
         self.target_alpha = target_alpha
         self.alpha = initial_alpha
-        self.descending = descending
+        self.delta_alpha = target_alpha - initial_alpha
         self.epochs = epochs
-        self.step = (target_alpha - initial_alpha) / self.epochs
+        self.descending = descending
+        self.step = 0
+        self.decay_rate = decay_rate
+        self.soft_epochs = epochs if hard_epochs is None else (epochs - hard_epochs)
 
     def step_alpha(self):
-        self.alpha += self.step
+        decay_factor = np.exp(-self.decay_rate * self.step)
+        self.alpha = self.target_alpha + self.delta_alpha * decay_factor
+        self.step += 1
 
     def forward(self, x: torch.Tensor):
         k = torch.full((x.shape[0],), self.k, dtype=torch.long, device=x.device)
 
         if not self.training:
-            return SoftTopK.apply(x, k, self.target_alpha, self.descending)
+            return TopK.apply(x, k, self.target_alpha, self.descending)
+
+        if self.hard_epochs is not None and self.step >= self.soft_epochs:
+            return TopK.apply(x, k, self.descending)
 
         return SoftTopK.apply(x, k, self.alpha, self.descending)
 
