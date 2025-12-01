@@ -338,7 +338,7 @@ class SoftTopK(torch.autograd.Function):
         # Return in original dtype if high_precision
         return grad_r.to(original_dtype) if high_precision else grad_r, None, None, None, None
 
-class AdaptiveSoftTopK():
+class AdaptiveSoftTopK(nn.Module):
     # to simulate linear decay, set decay_rate to a value close to 0 (e.g. 0.01)
     # decay_rate -> 1 steeper curve, decay_rate -> 0 flatter curve, closer to linear decay
     # with high_precision True, it works with float64 instead of float32
@@ -360,7 +360,12 @@ class AdaptiveSoftTopK():
         self.high_precision = high_precision
         self.step = 0
         self.decay_rate = decay_rate
+        self.hard_epochs = hard_epochs
         self.soft_epochs = epochs if hard_epochs is None else (epochs - hard_epochs)
+        
+        # initialize hard TopK module for evaluation and final epochs
+        # use identity activation to keep the selected values as is
+        self.hard_topk = TopK(k=k, act_fn=nn.Identity(), use_abs=False)
 
     def step_alpha(self):
         decay_factor = np.exp(-self.decay_rate * self.step)
@@ -368,14 +373,16 @@ class AdaptiveSoftTopK():
         self.step += 1
 
     def forward(self, x: torch.Tensor):
-        k = torch.full((x.shape[0],), self.k, dtype=torch.long, device=x.device)
-
+        # during evaluation, use hard TopK
         if not self.training:
-            return TopK.apply(x, k, self.target_alpha, self.descending)
+            return self.hard_topk(x)
 
+        # for final training epochs (given hard_epochs is set) use hard TopK
         if self.hard_epochs is not None and self.step >= self.soft_epochs:
-            return TopK.apply(x, k, self.descending)
+            return self.hard_topk(x)
 
+        # for soft training epochs use SoftTopK
+        k = torch.full((x.shape[0],), self.k, dtype=torch.long, device=x.device)
         return SoftTopK.apply(x, k, self.alpha, self.descending, self.high_precision)
 
 # Mapping of activation function names to their corresponding classes
