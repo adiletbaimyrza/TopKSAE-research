@@ -254,32 +254,35 @@ class SoftTopK(torch.autograd.Function):
     @staticmethod
     def forward(ctx, r, k, alpha, descending=False):
         assert r.shape[0] == k.shape[0], "k must have same batch size as r"
+
+        # store original dtype and work with float64
+        original_dtype = r.dtype
+        r_double = r.double()
         
-        batch_size, num_dim = r.shape
-        x = torch.empty_like(r, requires_grad=False)
+        batch_size, num_dim = r_double.shape
+        x = torch.empty_like(r_double, requires_grad=False)
 
         def finding_b():
-            scaled = torch.sort(r, dim=1)[0]
+            scaled = torch.sort(r_double, dim=1)[0]
             scaled.div_(alpha)
-            
+
             eB = torch.logcumsumexp(scaled, dim=1)
             eB.sub_(scaled).exp_()
-            
+
             torch.neg(scaled, out=x)
             eA = torch.flip(x, dims=(1,))
             torch.logcumsumexp(eA, dim=1, out=x)
             idx = torch.arange(start=num_dim - 1, end=-1, step=-1, device=x.device)
             torch.index_select(x, 1, idx, out=eA)
             eA.add_(scaled).exp_()
-            
-            row = torch.arange(1, 2 * num_dim + 1, 2, device=r.device)
+
+            row = torch.arange(1, 2 * num_dim + 1, 2, device=r_double.device)
             torch.add(torch.add(eA, eB, alpha=-1, out=x), row.view(1, -1), out=x)
-            
+
             w = (k if descending else num_dim - k).unsqueeze(1)
             i = torch.searchsorted(x, 2 * w)
             m = torch.clamp(i - 1, 0, num_dim - 1)
             n = torch.clamp(i, 0, num_dim - 1)
-            
             b = SoftTopK._solve(
                 scaled.gather(1, m),
                 scaled.gather(1, n),
@@ -290,40 +293,44 @@ class SoftTopK(torch.autograd.Function):
             return b
 
         b = finding_b()
-        
+
         sign = -1 if descending else 1
-        torch.div(r, alpha * sign, out=x)
+        torch.div(r_double, alpha * sign, out=x)
         x.sub_(sign * b)
-        
+
         sign_x = x > 0
         p = torch.abs(x)
         p.neg_().exp_().mul_(0.5)
-        
+
         inv_alpha = -sign / alpha
         S = torch.sum(p, dim=1, keepdim=True).mul_(inv_alpha)
-        
+
         torch.where(sign_x, 1 - p, p, out=p)
-        
-        ctx.save_for_backward(r, x, S)
+
+        # save float64 tensors but mark the original dtype
+        ctx.save_for_backward(r_double, x, S)
         ctx.alpha = alpha
-        return p
+        ctx.original_dtype = original_dtype
+        
+        # Return in original dtype
+        return p.to(original_dtype)
 
     @staticmethod
     def backward(ctx, grad_output):
         r, x, S = ctx.saved_tensors
         alpha = ctx.alpha
+        original_dtype = ctx.original_dtype
         
-        # Clone tensors to avoid in-place modifications on saved tensors
-        x = x.clone()
-        r = r.clone()
-        
-        q_temp = torch.softmax(-torch.abs(x), dim=1)
-        qgrad = q_temp * grad_output
-        grad_k = qgrad.sum(dim=1)
-        grad_r = S * q_temp * (grad_k.unsqueeze(1) - grad_output)
-        
-        return grad_r, None, None, None
+        # work in float64
+        grad_output_double = grad_output.double()
 
+        q_temp = torch.softmax(-torch.abs(x), dim=1)
+        qgrad = q_temp * grad_output_double
+        grad_k = qgrad.sum(dim=1)
+        grad_r = S * q_temp * (grad_k.unsqueeze(1) - grad_output_double)
+
+        # return in original dtype
+        return grad_r.to(original_dtype), None, None, None
 
 class AdaptiveSoftTopK():
     # to simulate linear decay, set decay_rate to a value close to 0 (e.g. 0.01)
