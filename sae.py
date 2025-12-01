@@ -250,40 +250,40 @@ class SoftTopK(torch.autograd.Function):
         return torch.where(
             e > 0, t + torch.log(z) - torch.log(ab), s - torch.log(z) + torch.log(ab)
         )
-    
+
     @staticmethod
     def forward(ctx, r, k, alpha, descending=False, high_precision=False):
         assert r.shape[0] == k.shape[0], "k must have same batch size as r"
-        
-        # Store original dtype and conditionally convert to float64
+
+        # store original dtype and work with float64 when high_precision
         original_dtype = r.dtype
         r_work = r.double() if high_precision else r
         
         batch_size, num_dim = r_work.shape
         x = torch.empty_like(r_work, requires_grad=False)
-        
+
         def finding_b():
             scaled = torch.sort(r_work, dim=1)[0]
             scaled.div_(alpha)
-            
+
             eB = torch.logcumsumexp(scaled, dim=1)
             eB.sub_(scaled).exp_()
-            
+
             torch.neg(scaled, out=x)
             eA = torch.flip(x, dims=(1,))
             torch.logcumsumexp(eA, dim=1, out=x)
             idx = torch.arange(start=num_dim - 1, end=-1, step=-1, device=x.device)
             torch.index_select(x, 1, idx, out=eA)
             eA.add_(scaled).exp_()
-            
+
             row = torch.arange(1, 2 * num_dim + 1, 2, device=r_work.device)
             torch.add(torch.add(eA, eB, alpha=-1, out=x), row.view(1, -1), out=x)
-            
+
             w = (k if descending else num_dim - k).unsqueeze(1)
             i = torch.searchsorted(x, 2 * w)
             m = torch.clamp(i - 1, 0, num_dim - 1)
             n = torch.clamp(i, 0, num_dim - 1)
-            
+
             b = SoftTopK._solve(
                 scaled.gather(1, m),
                 scaled.gather(1, n),
@@ -292,58 +292,57 @@ class SoftTopK(torch.autograd.Function):
                 w - i,
             )
             return b
-        
+
         b = finding_b()
-        
+
         sign = -1 if descending else 1
         torch.div(r_work, alpha * sign, out=x)
         x.sub_(sign * b)
-        
+
         sign_x = x > 0
         p = torch.abs(x)
         p.neg_().exp_().mul_(0.5)
-        
+
         inv_alpha = -sign / alpha
         S = torch.sum(p, dim=1, keepdim=True).mul_(inv_alpha)
-        
+
         torch.where(sign_x, 1 - p, p, out=p)
-        
+
+        # save float64 tensors but mark the original dtype
         ctx.save_for_backward(r_work, x, S)
         ctx.alpha = alpha
-        ctx.high_precision = high_precision
         ctx.original_dtype = original_dtype
+        ctx.high_precision = high_precision
         
-        # Return in original dtype if high_precision was used
+        # return in original dtype if high_precision
         return p.to(original_dtype) if high_precision else p
-    
+
     @staticmethod
     def backward(ctx, grad_output):
         r, x, S = ctx.saved_tensors
         alpha = ctx.alpha
-        high_precision = ctx.high_precision
         original_dtype = ctx.original_dtype
-        
-        # Conditionally work in float64
-        grad_output_work = grad_output.double() if high_precision else grad_output
-        
-        # Clone tensors to avoid in-place modifications on saved tensors
+        high_precision = ctx.high_precision
+
         x = x.clone()
         r = r.clone()
         
+        # Work in float64 if high_precision
+        grad_output_work = grad_output.double() if high_precision else grad_output
+
         q_temp = torch.softmax(-torch.abs(x), dim=1)
         qgrad = q_temp * grad_output_work
         grad_k = qgrad.sum(dim=1)
         grad_r = S * q_temp * (grad_k.unsqueeze(1) - grad_output_work)
-        
-        # Return in original dtype if high_precision was used
-        grad_r_out = grad_r.to(original_dtype) if high_precision else grad_r
-        
-        return grad_r_out, None, None, None, None
+
+        # Return in original dtype if high_precision
+        return grad_r.to(original_dtype) if high_precision else grad_r, None, None, None, None
 
 class AdaptiveSoftTopK():
     # to simulate linear decay, set decay_rate to a value close to 0 (e.g. 0.01)
     # decay_rate -> 1 steeper curve, decay_rate -> 0 flatter curve, closer to linear decay
-    def __init__(self, k, target_alpha=0.01, initial_alpha=1, decay_rate=0.2, descending=False, epochs=30, hard_epochs=None):
+    # with high_precision True, it works with float64 instead of float32
+    def __init__(self, k, target_alpha=0.01, initial_alpha=1, decay_rate=0.2, descending=False, high_precision=False, epochs=30, hard_epochs=None):
         super().__init__()
 
         assert(0 < decay_rate <= 1)
@@ -358,6 +357,7 @@ class AdaptiveSoftTopK():
         self.delta_alpha = target_alpha - initial_alpha
         self.epochs = epochs
         self.descending = descending
+        self.high_precision = high_precision
         self.step = 0
         self.decay_rate = decay_rate
         self.soft_epochs = epochs if hard_epochs is None else (epochs - hard_epochs)
@@ -376,7 +376,7 @@ class AdaptiveSoftTopK():
         if self.hard_epochs is not None and self.step >= self.soft_epochs:
             return TopK.apply(x, k, self.descending)
 
-        return SoftTopK.apply(x, k, self.alpha, self.descending)
+        return SoftTopK.apply(x, k, self.alpha, self.descending, self.high_precision)
 
 # Mapping of activation function names to their corresponding classes
 ACTIVATIONS_CLASSES = {
